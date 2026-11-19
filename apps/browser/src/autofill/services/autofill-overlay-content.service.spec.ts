@@ -528,15 +528,25 @@ describe("AutofillOverlayContentService", () => {
           );
         });
 
-        it("Closes the inline menu list and does not re-open the inline menu if the field has a value", async () => {
-          (autofillFieldElement as HTMLInputElement).value = "test";
+        it("Closes the inline menu list and does not re-open the inline menu if a password field has a value", async () => {
+          const passwordFieldElement = document.getElementById(
+            "password-field",
+          ) as ElementWithOpId<FormFieldElement>;
+          const passwordFieldData = createAutofillFieldMock({
+            opid: "password-field",
+            form: "validFormId",
+            elementNumber: 2,
+            autoCompleteType: "current-password",
+            type: "password",
+          });
+          (passwordFieldElement as HTMLInputElement).value = "test";
 
           await autofillOverlayContentService.setupOverlayListeners(
-            autofillFieldElement,
-            autofillFieldData,
+            passwordFieldElement,
+            passwordFieldData,
             pageDetailsMock,
           );
-          autofillFieldElement.dispatchEvent(new Event("input"));
+          passwordFieldElement.dispatchEvent(new Event("input"));
           await flushPromises();
 
           expect(sendExtensionMessageSpy).toHaveBeenCalledWith("closeAutofillInlineMenu", {
@@ -546,16 +556,155 @@ describe("AutofillOverlayContentService", () => {
           expect(sendExtensionMessageSpy).not.toHaveBeenCalledWith("openAutofillInlineMenu");
         });
 
-        it("opens the inline menu if the field does not have a value", async () => {
+        it("opens the inline menu if a password field does not have a value", async () => {
+          const passwordFieldElement = document.getElementById(
+            "password-field",
+          ) as ElementWithOpId<FormFieldElement>;
+          const passwordFieldData = createAutofillFieldMock({
+            opid: "password-field",
+            form: "validFormId",
+            elementNumber: 2,
+            autoCompleteType: "current-password",
+            type: "password",
+          });
+
           await autofillOverlayContentService.setupOverlayListeners(
-            autofillFieldElement,
-            autofillFieldData,
+            passwordFieldElement,
+            passwordFieldData,
             pageDetailsMock,
           );
-          autofillFieldElement.dispatchEvent(new Event("input"));
+          passwordFieldElement.dispatchEvent(new Event("input"));
           await flushPromises();
 
           expect(sendExtensionMessageSpy).toHaveBeenCalledWith("openAutofillInlineMenu");
+        });
+
+        describe("filtering the inline menu ciphers while typing a username", () => {
+          const waitForFilterDebounce = () => new Promise((resolve) => setTimeout(resolve, 150));
+
+          it("sends the typed username to the background to filter the inline menu", async () => {
+            (autofillFieldElement as HTMLInputElement).value = "alice";
+
+            await autofillOverlayContentService.setupOverlayListeners(
+              autofillFieldElement,
+              autofillFieldData,
+              pageDetailsMock,
+            );
+            autofillFieldElement.dispatchEvent(new Event("input"));
+            await waitForFilterDebounce();
+
+            expect(sendExtensionMessageSpy).toHaveBeenCalledWith("updateAutofillInlineMenuFilter", {
+              filterText: "alice",
+            });
+          });
+
+          it("does not close the inline menu while typing a username", async () => {
+            (autofillFieldElement as HTMLInputElement).value = "alice";
+
+            await autofillOverlayContentService.setupOverlayListeners(
+              autofillFieldElement,
+              autofillFieldData,
+              pageDetailsMock,
+            );
+            autofillFieldElement.dispatchEvent(new Event("input"));
+            await waitForFilterDebounce();
+
+            expect(sendExtensionMessageSpy).not.toHaveBeenCalledWith(
+              "closeAutofillInlineMenu",
+              expect.anything(),
+            );
+          });
+
+          it("debounces filter updates to the last typed value", async () => {
+            await autofillOverlayContentService.setupOverlayListeners(
+              autofillFieldElement,
+              autofillFieldData,
+              pageDetailsMock,
+            );
+            const inputElement = autofillFieldElement as HTMLInputElement;
+
+            inputElement.value = "a";
+            autofillFieldElement.dispatchEvent(new Event("input"));
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            inputElement.value = "al";
+            autofillFieldElement.dispatchEvent(new Event("input"));
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            inputElement.value = "ali";
+            autofillFieldElement.dispatchEvent(new Event("input"));
+            await waitForFilterDebounce();
+
+            const filterCalls = sendExtensionMessageSpy.mock.calls.filter(
+              ([command]) => command === "updateAutofillInlineMenuFilter",
+            );
+            expect(filterCalls).toHaveLength(1);
+            expect(filterCalls[0]).toEqual([
+              "updateAutofillInlineMenuFilter",
+              { filterText: "ali" },
+            ]);
+          });
+
+          it("sends an empty filter when the username field is cleared", async () => {
+            (autofillFieldElement as HTMLInputElement).value = "";
+
+            await autofillOverlayContentService.setupOverlayListeners(
+              autofillFieldElement,
+              autofillFieldData,
+              pageDetailsMock,
+            );
+            autofillFieldElement.dispatchEvent(new Event("input"));
+            await waitForFilterDebounce();
+
+            expect(sendExtensionMessageSpy).toHaveBeenCalledWith("updateAutofillInlineMenuFilter", {
+              filterText: "",
+            });
+          });
+
+          it("filters email fields", async () => {
+            (autofillFieldElement as HTMLInputElement).value = "alice@example.com";
+            autofillFieldElement.setAttribute("type", "email");
+            autofillFieldData.type = "email";
+            autofillFieldData.placeholder = "email";
+            autofillFieldData.autoCompleteType = "email";
+
+            await autofillOverlayContentService.setupOverlayListeners(
+              autofillFieldElement,
+              autofillFieldData,
+              pageDetailsMock,
+            );
+            autofillFieldElement.dispatchEvent(new Event("input"));
+            await waitForFilterDebounce();
+
+            expect(sendExtensionMessageSpy).toHaveBeenCalledWith("updateAutofillInlineMenuFilter", {
+              filterText: "alice@example.com",
+            });
+          });
+
+          it("does not send a filter when typing a password field", async () => {
+            const passwordFieldElement = document.getElementById(
+              "password-field",
+            ) as ElementWithOpId<FormFieldElement>;
+            const passwordFieldData = createAutofillFieldMock({
+              opid: "password-field",
+              form: "validFormId",
+              elementNumber: 2,
+              autoCompleteType: "current-password",
+              type: "password",
+            });
+            (passwordFieldElement as HTMLInputElement).value = "secret";
+
+            await autofillOverlayContentService.setupOverlayListeners(
+              passwordFieldElement,
+              passwordFieldData,
+              pageDetailsMock,
+            );
+            passwordFieldElement.dispatchEvent(new Event("input"));
+            await waitForFilterDebounce();
+
+            expect(sendExtensionMessageSpy).not.toHaveBeenCalledWith(
+              "updateAutofillInlineMenuFilter",
+              expect.anything(),
+            );
+          });
         });
 
         describe("input changes on a field filled by a card cipher", () => {

@@ -152,6 +152,7 @@ export type OverlayBackgroundExtensionMessage = {
   subFrameData?: SubFrameOffsetData;
   focusedFieldData?: FocusedFieldData;
   allFieldsRect?: AutofillField[];
+  filterText?: string;
   isOpeningFullInlineMenu?: boolean;
   styles?: Partial<CSSStyleDeclaration>;
   iframeSrc?: string;
@@ -242,6 +243,7 @@ export type OverlayBackgroundExtensionMessageHandlers = {
   triggerAutofillOverlayReposition: ({ sender }: BackgroundSenderParam) => void;
   checkIsInlineMenuCiphersPopulated: ({ sender }: BackgroundSenderParam) => void;
   updateFocusedFieldData: ({ message, sender }: BackgroundOnMessageHandlerParams) => void;
+  updateAutofillInlineMenuFilter: ({ message, sender }: BackgroundOnMessageHandlerParams) => void;
   updateIsFieldCurrentlyFocused: ({ message, sender }: BackgroundOnMessageHandlerParams) => void;
   checkIsFieldCurrentlyFocused: () => boolean;
   updateIsFieldCurrentlyFilling: ({ message }: BackgroundMessageParam) => void;

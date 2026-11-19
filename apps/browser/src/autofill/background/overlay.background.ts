@@ -99,6 +99,7 @@ import {
   specialCharacterToKeyMap,
 } from "../utils";
 import { trackGeneratedCredential } from "../utils/credential-history-utils";
+import { filterAndRankInlineMenuCiphers } from "../utils/inline-menu-cipher-filter";
 import { getSubFrameUrlVariations } from "../utils/url-variations";
 
 import { AutofillOrchestrator } from "./abstractions/autofill-orchestrator";
@@ -171,6 +172,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
   private inlineMenuListPort: chrome.runtime.Port | null = null;
   private inlineMenuListMessageConnectorPort: chrome.runtime.Port | null = null;
   private inlineMenuCiphers: Map<string, CipherView> = new Map();
+  private inlineMenuCipherFilter: string = "";
   private inlineMenuFido2Credentials: Set<string> = new Set();
   private inlineMenuPageTranslations: Record<string, string> | null = null;
   private inlineMenuPosition: InlineMenuPosition = {};
@@ -200,6 +202,10 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     checkIsInlineMenuCiphersPopulated: ({ sender }) =>
       this.checkIsInlineMenuCiphersPopulated(sender),
     updateFocusedFieldData: ({ message, sender }) => this.setFocusedFieldData(message, sender),
+    updateAutofillInlineMenuFilter: ({ message, sender }) =>
+      void this.withSenderTab(sender, (tab) =>
+        this.updateInlineMenuCipherFilter(message.filterText, tab),
+      ),
     updateIsFieldCurrentlyFocused: ({ message, sender }) =>
       this.updateIsFieldCurrentlyFocused(message, sender),
     checkIsFieldCurrentlyFocused: () => this.checkIsFieldCurrentlyFocused(),
@@ -429,6 +435,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
 
     this.clearGeneratedPassword$.next();
     this.focusedFieldData = null;
+    this.inlineMenuCipherFilter = "";
   }
 
   /**
@@ -558,6 +565,33 @@ export class OverlayBackground implements OverlayBackgroundInterface {
   }
 
   /**
+   * Updates the username filter applied to the inline menu ciphers. The filter is
+   * only ever sourced from username/email fields, so password values are never
+   * compared against or exposed by the inline menu.
+   *
+   * @param filterText - The text typed into the focused username/email field
+   * @param tab - The current tab
+   */
+  private async updateInlineMenuCipherFilter(filterText: string | undefined, tab: chrome.tabs.Tab) {
+    const normalizedFilter = (filterText ?? "").trim();
+    if (normalizedFilter === this.inlineMenuCipherFilter) {
+      return;
+    }
+
+    this.inlineMenuCipherFilter = normalizedFilter;
+
+    // Mirror the unlocked requirement used when refreshing the overlay ciphers.
+    // Otherwise typing while locked could replace the locked inline menu with
+    // previously populated cipher data.
+    const authStatus = await firstValueFrom(this.authService.activeAccountStatus$);
+    if (authStatus !== AuthenticationStatus.Unlocked) {
+      return;
+    }
+
+    await this.updateInlineMenuListCiphers(tab);
+  }
+
+  /**
    * Gets the decrypted ciphers within a user's vault based on the current tab's URL.
    *
    * @param currentTab - The current tab
@@ -662,6 +696,14 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     }
 
     this.currentInlineMenuCiphersCount = inlineMenuCipherData.length;
+
+    if (this.inlineMenuCipherFilter) {
+      inlineMenuCipherData = filterAndRankInlineMenuCiphers(
+        inlineMenuCipherData,
+        this.inlineMenuCipherFilter,
+      );
+    }
+
     return inlineMenuCipherData;
   }
 
@@ -1685,6 +1727,7 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     const sendOptions = { frameId: 0 };
     const updateVisibilityDefaults = { overlayElement, isVisible: false, forceUpdate: true };
     this.clearGeneratedPassword$.next();
+    this.inlineMenuCipherFilter = "";
 
     if (forceCloseInlineMenu) {
       BrowserApi.tabSendMessage(tab, { command, overlayElement }, sendOptions).catch((error) =>
@@ -2116,6 +2159,26 @@ export class OverlayBackground implements OverlayBackgroundInterface {
     };
     this.allFieldData = allFieldsRect ?? [];
     this.isFieldCurrentlyFocused = true;
+
+    // A username filter only applies to the field that produced it. Reset the
+    // filter and refresh the list when focus moves to a different field.
+    const focusedFieldChanged =
+      !previousFocusedFieldData ||
+      previousFocusedFieldData.tabId !== this.focusedFieldData.tabId ||
+      previousFocusedFieldData.frameId !== this.focusedFieldData.frameId ||
+      previousFocusedFieldData.focusedFieldOpid !== this.focusedFieldData.focusedFieldOpid ||
+      previousFocusedFieldData.focusedFieldForm !== this.focusedFieldData.focusedFieldForm;
+
+    if (this.inlineMenuCipherFilter && focusedFieldChanged) {
+      this.inlineMenuCipherFilter = "";
+      if (
+        this.focusedFieldData.inlineMenuFillType === CipherType.Login ||
+        this.focusedFieldData.inlineMenuFillType === InlineMenuFillTypes.AccountCreationUsername ||
+        this.focusedFieldData.inlineMenuFillType === InlineMenuFillTypes.CurrentPasswordUpdate
+      ) {
+        this.updateInlineMenuListCiphers(sender.tab).catch((error) => this.logService.error(error));
+      }
+    }
 
     if (this.shouldUpdatePasswordGeneratorMenuOnFieldFocus()) {
       this.updateInlineMenuGeneratedPasswordOnFocus(sender.tab).catch((error) =>

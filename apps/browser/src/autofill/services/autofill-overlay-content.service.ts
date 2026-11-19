@@ -850,10 +850,89 @@ export class AutofillOverlayContentService implements AutofillOverlayContentServ
    */
   private handleFormFieldInputEvent = (formFieldElement: ElementWithOpId<FormFieldElement>) => {
     return this.useEventHandlersMemo(
-      debounce(() => this.triggerFormFieldInput(formFieldElement), 100, true),
+      this.buildFormFieldInputHandler(formFieldElement),
       this.getFormFieldHandlerMemoIndex(formFieldElement, EVENTS.INPUT),
     );
   };
+
+  /**
+   * Builds the input event handler for a form field. Username and email fields
+   * keep the inline menu open and forward the typed value to the background so
+   * the list can be filtered. All other fields retain the existing behavior of
+   * closing the inline menu while the user types.
+   *
+   * @param formFieldElement - The form field element to build the handler for.
+   */
+  private buildFormFieldInputHandler(
+    formFieldElement: ElementWithOpId<FormFieldElement>,
+  ): EventListener {
+    const closeInlineMenu = debounce(() => this.triggerFormFieldInput(formFieldElement), 100, true);
+    const filterInlineMenu = debounce(
+      () => this.updateInlineMenuCipherFilter(formFieldElement),
+      100,
+    );
+
+    return () => {
+      if (
+        !elementIsFillableFormField(formFieldElement) ||
+        !this.isInlineMenuUsernameField(formFieldElement)
+      ) {
+        closeInlineMenu();
+        return;
+      }
+
+      this.storeModifiedFormElement(formFieldElement);
+      filterInlineMenu();
+    };
+  }
+
+  /**
+   * Identifies whether the provided field is a username or email field that
+   * should filter the inline menu ciphers as the user types.
+   *
+   * @param formFieldElement - The form field element to validate.
+   */
+  private isInlineMenuUsernameField(formFieldElement: ElementWithOpId<FormFieldElement>): boolean {
+    if (
+      !elementIsFillableFormField(formFieldElement) ||
+      isReadonlyOrDisabledFormFieldElement(formFieldElement)
+    ) {
+      return false;
+    }
+
+    const autofillFieldData = this.formFieldElements.get(formFieldElement);
+    if (!autofillFieldData) {
+      return false;
+    }
+
+    const fillTypeMatches =
+      autofillFieldData.inlineMenuFillType === CipherType.Login ||
+      autofillFieldData.inlineMenuFillType === InlineMenuFillTypes.AccountCreationUsername;
+    if (!fillTypeMatches) {
+      return false;
+    }
+
+    return (
+      this.inlineMenuFieldQualificationService.isUsernameField(autofillFieldData) ||
+      this.inlineMenuFieldQualificationService.isEmailField(autofillFieldData)
+    );
+  }
+
+  /**
+   * Sends the current username field value to the background so the inline menu
+   * list can be filtered by username. Password fields never reach this method.
+   *
+   * @param formFieldElement - The username or email field that triggered the input event.
+   */
+  private async updateInlineMenuCipherFilter(formFieldElement: ElementWithOpId<FormFieldElement>) {
+    if (!elementIsFillableFormField(formFieldElement)) {
+      return;
+    }
+
+    await this.sendExtensionMessage("updateAutofillInlineMenuFilter", {
+      filterText: formFieldElement.value ?? "",
+    });
+  }
 
   /**
    * Triggers when the form field element receives an input event. This method will

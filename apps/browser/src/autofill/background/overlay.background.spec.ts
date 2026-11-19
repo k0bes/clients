@@ -1248,6 +1248,98 @@ describe("OverlayBackground", () => {
       });
     });
 
+    it("filters the inline menu ciphers by username when an update filter message is received", async () => {
+      const tab = createChromeTabMock({ id: 2 });
+      const sender = mock<chrome.runtime.MessageSender>({ tab, frameId: 0 });
+      const url = "https://jest-testing-website.com";
+      const aliceCipher = mock<CipherView>({
+        id: "id-alice",
+        name: "alice",
+        type: CipherType.Login,
+        login: { username: "alice@example.com", password: "password", uri: url },
+      });
+      const bobCipher = mock<CipherView>({
+        id: "id-bob",
+        name: "bob",
+        type: CipherType.Login,
+        login: { username: "bob@example.com", password: "password", uri: url },
+      });
+      overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({ tabId: tab.id });
+      overlayBackground["inlineMenuCiphers"] = new Map([
+        ["inline-menu-cipher-0", bobCipher],
+        ["inline-menu-cipher-1", aliceCipher],
+      ]);
+
+      sendMockExtensionMessage(
+        { command: "updateAutofillInlineMenuFilter", filterText: "alice" },
+        sender,
+      );
+      await flushPromises();
+
+      expect(listPortSpy.postMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          command: "updateAutofillInlineMenuListCiphers",
+          ciphers: [expect.objectContaining({ id: "inline-menu-cipher-1" })],
+        }),
+      );
+    });
+
+    it("clears the username filter when focus moves to a different field", async () => {
+      const tab = createChromeTabMock({ id: 2 });
+      overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({ tabId: tab.id });
+      overlayBackground["inlineMenuCiphers"] = new Map([
+        ["inline-menu-cipher-0", loginCipher1],
+        ["inline-menu-cipher-1", loginCipher2],
+      ]);
+      const sender = mock<chrome.runtime.MessageSender>({ tab, frameId: 0 });
+
+      sendMockExtensionMessage(
+        { command: "updateAutofillInlineMenuFilter", filterText: "username-3" },
+        sender,
+      );
+      await flushPromises();
+
+      expect(overlayBackground["inlineMenuCipherFilter"]).toBe("username-3");
+
+      sendMockExtensionMessage(
+        {
+          command: "updateFocusedFieldData",
+          focusedFieldData: createFocusedFieldDataMock({
+            tabId: tab.id,
+            frameId: 0,
+            focusedFieldOpid: "another-field",
+          }),
+        },
+        sender,
+      );
+      await flushPromises();
+
+      expect(overlayBackground["inlineMenuCipherFilter"]).toBe("");
+      expect(listPortSpy.postMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          command: "updateAutofillInlineMenuListCiphers",
+          ciphers: expect.arrayContaining([
+            expect.objectContaining({ id: "inline-menu-cipher-0" }),
+            expect.objectContaining({ id: "inline-menu-cipher-1" }),
+          ]),
+        }),
+      );
+    });
+
+    it("clears the username filter when the inline menu closes", async () => {
+      const tab = createChromeTabMock({ id: 2 });
+      overlayBackground["focusedFieldData"] = createFocusedFieldDataMock({ tabId: tab.id });
+      overlayBackground["inlineMenuCipherFilter"] = "username-3";
+
+      sendMockExtensionMessage(
+        { command: "closeAutofillInlineMenu", forceCloseInlineMenu: true },
+        mock<chrome.runtime.MessageSender>({ tab, frameId: 0 }),
+      );
+      await flushPromises();
+
+      expect(overlayBackground["inlineMenuCipherFilter"]).toBe("");
+    });
+
     it.each([
       {
         description: "for the standard inline menu path",
